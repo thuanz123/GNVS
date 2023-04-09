@@ -138,4 +138,9 @@ class SRNDataset(torch.utils.data.Dataset):
         }
 
         rays = gen_rays(all_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=result["c"], ndc=False)
-        return result, rays
+
+        result["rays"] = rays
+
+        return result
+
+

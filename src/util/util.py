@@ -536,3 +536,123 @@ def get_module(net):
         return net.module
     else:
         return net
+
+
+def sample_coarse_points(rays, n_coarse=64, lindisp=False):
+    """
+    Stratified sampling. Note this is different from original NeRF slightly.
+    :param rays ray [origins (3), directions (3), near (1), far (1)] (B, H, W, 8)
+    :return (B, n_coarse, H, W, Kc)
+    """
+    b, h, w, _ = rays.shape
+    rays = rays.view(-1, rays.shape[-1])
+
+    device = rays.device
+    near, far = rays[:, -2:-1], rays[:, -1:]  # (B, 1)
+
+    step = 1.0 / n_coarse
+    B = rays.shape[0] 
+    z_steps = torch.linspace(0, 1 - step, n_coarse, device=device)  # (Kc)
+    z_steps = z_steps.unsqueeze(0).repeat(B, 1)  # (B, Kc)
+    z_steps += torch.rand_like(z_steps) * step
+
+    if not lindisp:  # Use linear sampling in depth space
+        z_samp = near * (1 - z_steps) + far * z_steps  # (B, Kf)
+    else:  # Use linear sampling in disparity space
+        z_samp = 1 / (1 / near * (1 - z_steps) + 1 / far * z_steps)  # (B, Kf)
+
+
+    B, K = z_samp.shape
+    deltas = z_samp[:, 1:] - z_samp[:, :-1]  # (B, K-1)
+    delta_inf = rays[:, -1:] - z_samp[:, -1:]
+    deltas = torch.cat([deltas, delta_inf], -1)  # (B, K)
+
+    # (B, K, 3)
+    points = rays[:, None, :3] + z_samp.unsqueeze(2) * rays[:, None, 3:6]
+    points = points.reshape(b, h, w, points.shape[-2], points.shape[-1])  # (b, h, w, num_points, 3)
+    points = points.permute(0, 3, 1, 2, 4)      # (b, num_points, h, w, 3)
+
+    deltas = deltas.reshape(b, h, w, points.shape[-2], 1)  # (b, h, w, num_points, 1)
+    deltas = deltas.permute(0, 3, 1, 2, 4)      # (b, num_points, h, w, 1)
+    return points, deltas, z_samp
+
+
+def sample_from_3dgrid(grid, coordinates):
+    """
+    Expects coordinates in shape (batch_size, D, H, W, 3)
+    Expects grid in shape (B, channels, D, H, W)
+    (Also works if grid has batch size)
+    Returns sampled features of shape (batch_size, D, H, W, feature_channels)
+    """
+    batch_size, n_samples, h, w, n_dims = coordinates.shape
+    sampled_features = torch.nn.functional.grid_sample(grid,
+                                                       coordinates,
+                                                       mode='bilinear', padding_mode='zeros', align_corners=False)
+
+    N, C, D, H, W = sampled_features.shape
+    sampled_features = sampled_features.permute(0, 2, 3, 4, 1)
+    return sampled_features
+
+
+def composite(points, deltas, z_samp, white_bkgd=True):
+    """
+    Render RGB and depth for each ray using NeRF alpha-compositing formula,
+    given sampled positions along each ray (see sample_*)
+    :param model should return (B, (r, g, b, sigma)) when called with (B, (x, y, z))
+    should also support 'coarse' boolean argument
+    :param rays ray [origins (3), directions (3), near (1), far (1)] (B, 8)
+    :param z_samp z positions sampled for each ray (B, K)
+    :param coarse whether to evaluate using coarse NeRF
+    :param sb super-batch dimension; 0 = disable
+    :return weights (B, K), rgb (B, 3), depth (B)
+    """
+
+    b, num_sample, h, w, _ = points.shape
+    rgbs = points[..., :16]  # (B, num_sample, H, W, 17)
+    sigmas = points[..., 16] # (B, num_sample, H, W)
+
+    sigmas = sigmas.permute(0, 2, 3, 1)  # (B, num_sample, H, W) --> (B, H, W, num_sample)
+    sigmas = sigmas.reshape(-1, sigmas.shape[-1])    # (B, H, W, num_sample) --> (B * H * W, num_sample)
+
+    rgbs = rgbs.permute(0, 2, 3, 1, 4)  # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
+    rgbs = rgbs.reshape(-1, rgbs.shape[-2], rgbs.shape[-1])    # (B, H, W, num_sample, 16) --> (B * H * W, num_sample, 16)
+
+
+    deltas = deltas.permute(0, 2, 3, 1, 4)  # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
+    deltas = deltas.reshape(-1, sigmas.shape[-1])    # (B, H, W, num_sample) --> (B * H * W, num_sample)
+    
+    # if self.training and self.noise_std > 0.0:
+    #     sigmas = sigmas + torch.randn_like(sigmas) * self.noise_std
+    breakpoint()
+    alphas = 1 - torch.exp(-deltas * torch.relu(sigmas))  # (B, K)
+    deltas = None
+    sigmas = None
+    
+    alphas_shifted = torch.cat(
+        [torch.ones_like(alphas[:, :1]), 1 - alphas + 1e-10], -1
+    )  # (B, K+1) = [1, a1, a2, ...]
+
+    T = torch.cumprod(alphas_shifted, -1)  # (B)
+    weights = alphas * T[:, :-1]  # (B, K)
+    alphas = None
+    alphas_shifted = None
+
+    rgb_final = torch.sum(weights.unsqueeze(-1) * rgbs, -2)  # (B, 3)
+    depth_final = torch.sum(weights * z_samp, -1)  # (B)
+    if white_bkgd:
+        # White background
+        pix_alpha = weights.sum(dim=1)  # (B), pixel alpha
+        rgb_final = rgb_final + 1 - pix_alpha.unsqueeze(-1)  # (B, 3)
+    
+    # weights = weights.reshape(b, h, w, 64)
+    depth_final = depth_final.reshape(b, h, w, 1).permute(0, 3, 1, 2)
+    rgb_final = rgb_final.reshape(b, h, w, 16).permute(0, 3, 1, 2)
+
+    # up sample image from 64x64 to 128x128
+    depth_final = F.interpolate(depth_final, (128, 128), mode='bilinear')
+    rgb_final = F.interpolate(rgb_final, (128, 128), mode='bilinear')
+
+    return {
+        "rgb_final" : rgb_final,
+        "depth_final" : depth_final,
+    }
