@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import glob
 import imageio
 import numpy as np
-from src.util.util import get_image_to_tensor_balanced, get_mask_to_tensor
+from src.util.util import get_image_to_tensor_balanced, get_mask_to_tensor, gen_rays
 
 class SRNDataset(torch.utils.data.Dataset):
     """
@@ -54,6 +54,9 @@ class SRNDataset(torch.utils.data.Dataset):
             self.z_near = 0.8
             self.z_far = 1.8
         self.lindisp = False
+
+        self.render_width = 64
+        self.render_height = 64
 
     def __len__(self):
         return len(self.intrins)
@@ -133,4 +136,6 @@ class SRNDataset(torch.utils.data.Dataset):
             "bbox": all_bboxes,
             "poses": all_poses,
         }
-        return result
+
+        rays = gen_rays(all_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=result["c"], ndc=False)
+        return result, rays

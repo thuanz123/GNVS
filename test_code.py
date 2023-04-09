@@ -1,6 +1,8 @@
-from src.dataset import get_split_dataset
+from src.model.FeatureVolumeEncoder import FeatureVolumeEncoder
+import torch
 
+dummy_data = torch.rand((1, 3, 128, 128))
+volume_encoder = FeatureVolumeEncoder()
 
-data_dir = '/lustre/scratch/client/vinai/users/tungdt33/data/cars'
-train_set, val_set, test_set = get_split_dataset("srn", data_dir, want_split="all", training=True)
-breakpoint()
+volume = volume_encoder(dummy_data)
+print(volume.shape)
