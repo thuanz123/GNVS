@@ -50,7 +50,7 @@ def parse_int_list(s):
 
 # Hyperparameters.
 @click.option('--duration',      help='Training duration', metavar='MIMG',                          type=click.FloatRange(min=0, min_open=True), default=200, show_default=True)
-@click.option('--batch',         help='Total batch size', metavar='INT',                            type=click.IntRange(min=1), default=8, show_default=True)
+@click.option('--batch',         help='Total batch size', metavar='INT',                            type=click.IntRange(min=1), default=64, show_default=True)
 @click.option('--batch-gpu',     help='Limit batch size per GPU', metavar='INT',                    type=click.IntRange(min=1))
 @click.option('--cbase',         help='Channel multiplier  [default: varies]', metavar='INT',       type=int)
 @click.option('--cres',          help='Channels per resolution  [default: varies]', metavar='LIST', type=parse_int_list)

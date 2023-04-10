@@ -218,35 +218,34 @@ def training_loop(
                     pickle.dump(data, f)
             del data # conserve memory
             
-            with torch.no_grad():
-                data = next(dataset_iterator)
-                train_images = data["train_images"].to(device).to(torch.float32) 
+            if dist.get_rank() == 0:
+                with torch.no_grad():
+                    data = next(dataset_iterator)
+                    train_images = data["train_images"].to(device).to(torch.float32) 
 
-                target_rays = data["target_rays"].to(device)
-                target_images = data["target_images"].to(device).to(torch.float32)
-                target_images = target_images.reshape(target_images.shape[0], 3, target_images.shape[-2], target_images.shape[-1])                          # super_batch, 1, 3, 128, 128
+                    target_rays = data["target_rays"].to(device)
+                    target_images = data["target_images"].to(device).to(torch.float32)
+                    target_images = target_images.reshape(target_images.shape[0], 3, target_images.shape[-2], target_images.shape[-1])                          # super_batch, 1, 3, 128, 128
 
-                loss, target_images, D_yn, noises = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
-                
-                np_target_images = target_images.cpu().numpy()
-                np_D_yn = D_yn.cpu().numpy()
-                np_loss = loss.cpu().numpy()
-                np_noises = noises.cpu().numpy()
+                    loss, target_images, D_yn, noises = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
+                    
+                    np_target_images = target_images.cpu().numpy()
+                    np_D_yn = D_yn.cpu().numpy()
+                    np_loss = loss.cpu().numpy()
+                    np_noises = noises.cpu().numpy()
 
 
-                target_images = []
-                for image in np_target_images:
-                    target_images.append(image)
+                    target_images = []
+                    for image in np_target_images:
+                        target_images.append(image)
 
-                # np.vstack(target_images).shape
+                    # np.vstack(target_images).shape
 
-                save_image_grid(target_images, os.path.join(run_dir, f'target_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,2))
-                save_image_grid(np_D_yn, os.path.join(run_dir, f'denoises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,2))
-                save_image_grid(np_loss, os.path.join(run_dir, f'loss_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,2))
-                save_image_grid(np_noises, os.path.join(run_dir, f'noises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,2))
+                    save_image_grid(target_images, os.path.join(run_dir, f'target_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+                    save_image_grid(np_D_yn, os.path.join(run_dir, f'denoises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+                    save_image_grid(np_loss, os.path.join(run_dir, f'loss_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+                    save_image_grid(np_noises, os.path.join(run_dir, f'noises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
 
-                breakpoint()
-                print(loss.shape)
 
         # Save full dump of the training state.
         if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
