@@ -572,8 +572,12 @@ def sample_coarse_points(rays, n_coarse=64, lindisp=False):
     points = points.reshape(b, h, w, points.shape[-2], points.shape[-1])  # (b, h, w, num_points, 3)
     points = points.permute(0, 3, 1, 2, 4)      # (b, num_points, h, w, 3)
 
-    deltas = deltas.reshape(b, h, w, points.shape[-2], 1)  # (b, h, w, num_points, 1)
-    deltas = deltas.permute(0, 3, 1, 2, 4)      # (b, num_points, h, w, 1)
+    deltas = deltas.reshape(b, h, w, points.shape[-2], 1)   # (b, h, w, num_points, 1)
+    deltas = deltas.permute(0, 3, 1, 2, 4)                  # (b, num_points, h, w, 1)
+
+    z_samp = z_samp.reshape(b, h, w, points.shape[-2], 1)   # (b, h, w, num_points, 1)
+    z_samp = z_samp.permute(0, 3, 1, 2, 4)                  # (b, num_points, h, w, 1)
+
     return points, deltas, z_samp
 
 
@@ -606,24 +610,25 @@ def composite(points, deltas, z_samp, white_bkgd=True):
     :param sb super-batch dimension; 0 = disable
     :return weights (B, K), rgb (B, 3), depth (B)
     """
-
     b, num_sample, h, w, _ = points.shape
-    rgbs = points[..., :16]  # (B, num_sample, H, W, 17)
-    sigmas = points[..., 16] # (B, num_sample, H, W)
+    rgbs = points[..., :16]                                     # (B, num_sample, H, W, 17)
+    sigmas = points[..., 16]                                    # (B, num_sample, H, W)
 
-    sigmas = sigmas.permute(0, 2, 3, 1)  # (B, num_sample, H, W) --> (B, H, W, num_sample)
-    sigmas = sigmas.reshape(-1, sigmas.shape[-1])    # (B, H, W, num_sample) --> (B * H * W, num_sample)
+    sigmas = sigmas.permute(0, 2, 3, 1)                         # (B, num_sample, H, W) --> (B, H, W, num_sample)
+    sigmas = sigmas.reshape(-1, sigmas.shape[-1])               # (B, H, W, num_sample) --> (B * H * W, num_sample)
 
-    rgbs = rgbs.permute(0, 2, 3, 1, 4)  # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
-    rgbs = rgbs.reshape(-1, rgbs.shape[-2], rgbs.shape[-1])    # (B, H, W, num_sample, 16) --> (B * H * W, num_sample, 16)
+    rgbs = rgbs.permute(0, 2, 3, 1, 4)                          # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
+    rgbs = rgbs.reshape(-1, rgbs.shape[-2], rgbs.shape[-1])     # (B, H, W, num_sample, 16) --> (B * H * W, num_sample, 16)
 
 
-    deltas = deltas.permute(0, 2, 3, 1, 4)  # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
-    deltas = deltas.reshape(-1, sigmas.shape[-1])    # (B, H, W, num_sample) --> (B * H * W, num_sample)
+    deltas = deltas.permute(0, 2, 3, 1, 4)                      # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
+    deltas = deltas.reshape(-1, sigmas.shape[-1])               # (B, H, W, num_sample) --> (B * H * W, num_sample)
+
+    z_samp = z_samp.permute(0, 2, 3, 1, 4)                      # (B, num_sample, H, W, 16) --> (B, H, W, num_sample, 16)
+    z_samp = z_samp.reshape(-1, sigmas.shape[-1])               # (B, H, W, num_sample) --> (B * H * W, num_sample)
     
     # if self.training and self.noise_std > 0.0:
     #     sigmas = sigmas + torch.randn_like(sigmas) * self.noise_std
-    breakpoint()
     alphas = 1 - torch.exp(-deltas * torch.relu(sigmas))  # (B, K)
     deltas = None
     sigmas = None

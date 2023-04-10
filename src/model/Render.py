@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -15,35 +16,40 @@ class Renderer(nn.Module):
         self.mlp_nerf = MLP_Nerf()
 
     def forward(self, data):
-        images = data["images"].to(self.device)
-        target_rays = data["target_rays"].to(self.device) # super_batch, 3, 128, 128
+        images = data["train_images"].to(self.device)                               # super_batch, 3, 3, 128, 128
+        target_images = data["target_images"].to(self.device)                       # super_batch, 1, 3, 128, 128
+        target_rays = data["target_rays"].to(self.device)                           # super_batch, 1, 1,  64,  64
 
-
-        sb = 1
-        b, _, h, w = images.shape
-        batch_images = images.reshape(1, 50, 3, 128, 128)   # super_batch, batch, 3, 128, 128
-
-
-        batch_images = batch_images.reshape(sb*b, 3, h, w)
-        batch_rays = batch_rays.reshape(sb*b, 8, 64, 64)
+        sb, b, _, h, w = images.shape
         
+        mb = np.random.randint(1, 4, (1))[0]                                        # random mini batch
+        images = images[:, :mb,...]
+
+        batch_images = images.reshape(sb*mb, 3, h, w)                               # super_batch* mini_batch, 3, 128, 128
+        
+        target_rays = target_rays.repeat(1, mb, 1, 1, 1)                            # super_batch, mini_batch, 64, 64, 8
+        batch_rays = target_rays.reshape(sb * mb, 64, 64, 8)                        # super_batch * mini_batch, 64, 64, 8
+
         volumes = self.volume_encoder(batch_images)
 
-
-        points, deltas, z_samp = sample_coarse_points(target_rays)
+        points, deltas, z_samp = sample_coarse_points(batch_rays)
+        
         sampled_features = sample_from_3dgrid(volumes, points)
 
-        sampled_features = sampled_features.reshape(sb, b, 64, 64, 64, 16)
+        sampled_features = sampled_features.reshape(sb, mb, 64, 64, 64, 16)
         sampled_features = sampled_features.mean(dim=1)
         sampled_features.reshape(sb, 64, 64, 64, 16)
 
-        b, sample_points, h, w, c = sampled_features.shape
+        sb, sample_points, render_h, render_w, c = sampled_features.shape
 
-        point_features = self.mlp_nerf(sampled_features.reshape(b, -1 , c))
-        point_features = point_features.reshape(b, sample_points, h, w, -1)
+        point_features = self.mlp_nerf(sampled_features.reshape(sb, -1 , c))        # super_batch, n_samples * render_h * render_w, 17
+        point_features = point_features.reshape(sb, sample_points, render_h, render_w, -1)        # super_batch, n_samples, render_h, render_w, 17
 
-        out = composite(point_features, deltas, z_samp)
-        rgb_final = out["rgb_final"].reshape(sb, b, 3, 128, 128)
-        depth_final = out["depth_final"].reshape(sb, b, 1, 128, 128)
+        out = composite(point_features, deltas[:sb,...], z_samp[:sb,...])
 
-        return rgb_final, depth_final
+
+        rgb_final = out["rgb_final"]
+        depth_final = out["depth_final"]
+        target_images = target_images.reshape(sb, 3, h, w)                          # super_batch, 1, 3, 128, 128
+
+        return rgb_final, depth_final, target_images

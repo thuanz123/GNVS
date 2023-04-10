@@ -124,22 +124,32 @@ class SRNDataset(torch.utils.data.Dataset):
         if self.world_scale != 1.0:
             focal *= self.world_scale
             all_poses[:, :3, 3] *= self.world_scale
+
         focal = torch.tensor(focal, dtype=torch.float32)
+        c = torch.tensor([cx, cy], dtype=torch.float32)
+
+        # random select image
+        idx = np.random.choice(all_imgs.shape[0], 4)
+        all_imgs = all_imgs[idx]
+        all_poses = all_poses[idx]
+
+        target_rays = gen_rays(all_poses[-1].unsqueeze(0), self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
 
         result = {
             "path": dir_path,
             "img_id": index,
             "focal": focal,
-            "c": torch.tensor([cx, cy], dtype=torch.float32),
-            "images": all_imgs,
-            "masks": all_masks,
-            "bbox": all_bboxes,
-            "poses": all_poses,
+            "c": c,
+
+            "train_images": all_imgs[:-1],
+            "target_images": all_imgs[-1].unsqueeze(0),
+
+            "train_poses": all_poses[:-1],
+            "target_poses": all_poses[-1],
+            "target_rays": target_rays
         }
 
-        rays = gen_rays(all_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=result["c"], ndc=False)
 
-        result["rays"] = rays
 
         return result
 
