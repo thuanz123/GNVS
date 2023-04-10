@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from src.torch_utils import persistence
 from torch.nn.functional import silu
+from src.model.Render import Renderer
 
 #----------------------------------------------------------------------------
 # Unified routine for initializing weights and biases.
@@ -633,6 +634,7 @@ class EDMPrecond(torch.nn.Module):
     def __init__(self,
         img_resolution,                     # Image resolution.
         img_channels,                       # Number of color channels.
+        out_channels,
         label_dim       = 0,                # Number of class labels, 0 = unconditional.
         use_fp16        = False,            # Execute the underlying model at FP16 precision?
         sigma_min       = 0,                # Minimum supported noise level.
@@ -644,15 +646,19 @@ class EDMPrecond(torch.nn.Module):
         super().__init__()
         self.img_resolution = img_resolution
         self.img_channels = img_channels
+        self.out_channels = out_channels
         self.label_dim = label_dim
         self.use_fp16 = use_fp16
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.sigma_data = sigma_data
-        self.model = globals()[model_type](img_resolution=img_resolution, in_channels=img_channels, out_channels=img_channels, label_dim=label_dim, **model_kwargs)
+        self.model = globals()[model_type](img_resolution=img_resolution, in_channels=img_channels, out_channels=out_channels, label_dim=label_dim, **model_kwargs)
 
-    def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
-        x = x.to(torch.float32)
+        self.renderer = Renderer()
+
+    def forward(self, noised_images, cond_images, target_rays, sigma, class_labels=None, force_fp32=False, **model_kwargs):
+        x, depth_final = self.renderer(cond_images, target_rays)
+        x = torch.cat([noised_images, x], dim=1)
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
         class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
         dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
@@ -664,7 +670,8 @@ class EDMPrecond(torch.nn.Module):
 
         F_x = self.model((c_in * x).to(dtype), c_noise.flatten(), class_labels=class_labels, **model_kwargs)
         assert F_x.dtype == dtype
-        D_x = c_skip * x + c_out * F_x.to(torch.float32)
+
+        D_x = c_skip * noised_images + c_out * F_x.to(torch.float32)
         return D_x
 
     def round_sigma(self, sigma):

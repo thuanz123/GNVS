@@ -64,25 +64,21 @@ class VELoss:
 
 @persistence.persistent_class
 class EDMLoss:
-    def __init__(self, P_mean=-1.0, P_std=1.4, sigma_data=0.5):
+    def __init__(self, P_mean=-1.2, P_std=1.2, sigma_data=0.5):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-
-    def __call__(self, net, feature_maps, target_images, labels=None, augment_pipe=None):
+    def __call__(self, net, train_images, target_images, target_rays, augment_pipe=None):
         rnd_normal = torch.randn([target_images.shape[0], 1, 1, 1], device=target_images.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
+        y, augment_labels = augment_pipe(target_images) if augment_pipe is not None else (target_images, None)
+        n = torch.randn_like(y) * sigma
 
-        noise = torch.randn_like(target_images) * sigma
-        noise_image = target_images + noise
-        input_model = torch.cat([feature_maps, noise_image], dim = 1)
-
-        D_yn = net(input_model, sigma.reshape(sigma.shape[0]), labels, augment_labels=augment_pipe)
-
-        loss = weight * ((D_yn - target_images) ** 2)
-
-        return loss
+        D_yn = net(noised_images=y + n, cond_images=train_images, target_rays=target_rays, \
+                                            sigma=sigma, class_labels=None, augment_labels=augment_labels)
+        loss = weight * ((D_yn - y) ** 2)
+        return loss, target_images, D_yn, y + n
 
 #----------------------------------------------------------------------------

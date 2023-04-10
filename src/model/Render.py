@@ -8,17 +8,16 @@ from src.model.MLP import MLP_Nerf
 from src.util.util import sample_coarse_points, sample_from_3dgrid, composite
 
 class Renderer(nn.Module):
-    def __init__(self, device='cuda:0'):
+    def __init__(self):
         super().__init__()
 
-        self.device = device
         self.volume_encoder = FeatureVolumeEncoder()
         self.mlp_nerf = MLP_Nerf()
 
-    def forward(self, data):
-        images = data["train_images"].to(self.device)                               # super_batch, 3, 3, 128, 128
-        target_images = data["target_images"].to(self.device)                       # super_batch, 1, 3, 128, 128
-        target_rays = data["target_rays"].to(self.device)                           # super_batch, 1, 1,  64,  64
+    def forward(self, images, target_rays):
+        # images = data["train_images"]                                               # super_batch, 3, 3, 128, 128
+        # target_images = data["target_images"]                                       # super_batch, 1, 3, 128, 128
+        # target_rays = data["target_rays"]                                           # super_batch, 1, 1,  64,  64
 
         sb, b, _, h, w = images.shape
         
@@ -50,6 +49,6 @@ class Renderer(nn.Module):
 
         rgb_final = out["rgb_final"]
         depth_final = out["depth_final"]
-        target_images = target_images.reshape(sb, 3, h, w)                          # super_batch, 1, 3, 128, 128
+        
 
-        return rgb_final, depth_final, target_images
+        return rgb_final, depth_final
