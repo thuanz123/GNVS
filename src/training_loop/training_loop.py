@@ -220,7 +220,7 @@ def training_loop(
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 
-        if dist.get_rank() == 0 and cur_tick % 1 == 0:
+        if dist.get_rank() == 0 and cur_tick % 2 == 0:
             grad_img_path = os.path.join(run_dir, f'grad_{cur_nimg//1000:06d}.png')
             plot_grad_flow(ddp.named_parameters(), grad_img_path)
         
