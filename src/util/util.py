@@ -572,10 +572,10 @@ def sample_coarse_points(rays, n_coarse=64, lindisp=False):
     points = points.reshape(b, h, w, points.shape[-2], points.shape[-1])  # (b, h, w, num_points, 3)
     points = points.permute(0, 3, 1, 2, 4)      # (b, num_points, h, w, 3)
 
-    deltas = deltas.reshape(b, h, w, points.shape[-2], 1)   # (b, h, w, num_points, 1)
+    deltas = deltas.reshape(b, h, w, points.shape[1], 1)   # (b, h, w, num_points, 1)
     deltas = deltas.permute(0, 3, 1, 2, 4)                  # (b, num_points, h, w, 1)
 
-    z_samp = z_samp.reshape(b, h, w, points.shape[-2], 1)   # (b, h, w, num_points, 1)
+    z_samp = z_samp.reshape(b, h, w, points.shape[1], 1)   # (b, h, w, num_points, 1)
     z_samp = z_samp.permute(0, 3, 1, 2, 4)                  # (b, num_points, h, w, 1)
 
     return points, deltas, z_samp

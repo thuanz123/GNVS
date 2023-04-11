@@ -1,47 +1,31 @@
 from src.model.Render import Renderer
 import torch
-from src.dataset import get_split_dataset
+from src.dataset.SRNDataset import SRNDataset
 from torch.utils.data import DataLoader
-from src.model.networks import SongUNet
-from src.model.loss import EDMLoss
+from src.util.util import gen_rays, sample_coarse_points
 
 device = torch.device('cuda:0')
 data_dir = '/lustre/scratch/client/vinai/users/tungdt33/data/cars'
-train_set, val_set, test_set = get_split_dataset("srn", data_dir, want_split="all", training=True)
 
+train_set = SRNDataset(data_dir, stage="train", image_size=(128, 128), world_scale=1.0)
 
-train_dataloader = DataLoader(train_set, batch_size=8, shuffle=True)
+train_dataloader = DataLoader(train_set, batch_size=1, shuffle=False)
 
-net = SongUNet(img_resolution=128,                     # Image resolution at input/output.
-                        in_channels=19,                        # Number of color channels at input.
-                        out_channels=3,                       # Number of color channels at output.
-                        label_dim           = 0,            # Number of class labels, 0 = unconditional.
-                        augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
-
-                        model_channels      = 128,          # Base multiplier for the number of channels.
-                        channel_mult        = [1,2,2,2],    # Per-resolution multipliers for the number of channels.
-                        channel_mult_emb    = 4,            # Multiplier for the dimensionality of the embedding vector.
-                        num_blocks          = 4,            # Number of residual blocks per resolution.
-                        attn_resolutions    = [16],         # List of resolutions with self-attention.
-                        dropout             = 0.10,         # Dropout probability of intermediate activations.
-                        label_dropout       = 0,            # Dropout probability of class labels for classifier-free guidance.
-
-                        embedding_type      = 'positional', # Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
-                        channel_mult_noise  = 1,            # Timestep embedding size: 1 for DDPM++, 2 for NCSN++.
-                        encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
-                        decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
-                        resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
-                    ).to(device)
-
-loss_func = EDMLoss()
 
 for data in train_dataloader:
-    renderer = Renderer().to(device)
+    images = data["images"].reshape(50, 3, 128, 128)  # (NV, 3, H, W)
+    poses = data["poses"].reshape(50, 4, 4)  # (NV, 4, 4)
+    focal = data["focal"]
+    c = data["c"]
 
-    render_images, depth_final, target_images = renderer(data)
-    loss = loss_func(net, render_images, target_images)
+    cam_rays = gen_rays(poses, 64, 64, focal, 0.8, 1.8, c=c)
+    points, _, _ = sample_coarse_points(cam_rays)
 
-    breakpoint()
+    torch.save(points, "points.pt")
+    torch.save(images, "images.pt")
+    torch.save(cam_rays, "cam_rays.pt")
+    torch.save(poses, "poses.pt")
+    break
 
     
 

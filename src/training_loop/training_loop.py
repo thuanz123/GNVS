@@ -17,12 +17,45 @@ import numpy as np
 import torch
 import PIL
 import imageio
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from src import dnnlib
 from src.torch_utils import distributed as dist
 from src.torch_utils import training_stats
 from src.torch_utils import misc
 from src.sample.sample import Sample
+
+def plot_grad_flow(named_parameters, saved_path):
+    '''Plots the gradients flowing through different layers in the net during training.
+    Can be used for checking for possible gradient vanishing / exploding problems.
+    
+    Usage: Plug this function in Trainer class after loss.backwards() as 
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    ave_grads = []
+    max_grads= []
+    layers = []
+    for n, p in named_parameters:
+        if(p.requires_grad) and ("bias" not in n) and ("module.renderer" in n):
+            layers.append(n)
+            print(n, p.grad.detach().abs().mean().cpu().numpy())
+            ave_grads.append(p.grad.detach().abs().mean().cpu().numpy())
+            max_grads.append(p.grad.detach().abs().max().cpu().numpy())
+
+    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
+    plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
+    plt.xlim(left=0, right=len(ave_grads))
+    plt.ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
+    plt.xlabel("Layers")
+    plt.ylabel("average gradient")
+    plt.title("Gradient flow")
+    plt.grid(True)
+    plt.legend([Line2D([0], [0], color="c", lw=4),
+                Line2D([0], [0], color="b", lw=4),
+                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+    plt.savefig(saved_path)
 
 def save_image_grid(img, fname, drange, grid_size):
     lo, hi = drange
@@ -186,6 +219,10 @@ def training_loop(
                 loss, _, _, _, _, _ = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
+
+        if dist.get_rank() == 0 and cur_tick % 1 == 0:
+            grad_img_path = os.path.join(run_dir, f'grad_{cur_nimg//1000:06d}.png')
+            plot_grad_flow(ddp.named_parameters(), grad_img_path)
         
         # Update weights.
         for g in optimizer.param_groups:

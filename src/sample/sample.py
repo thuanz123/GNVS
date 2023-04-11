@@ -40,7 +40,7 @@ class Sample:
 
         self.net = None
         self.device = device
-        self.batch_size = 16
+        self.batch_size = 8
         self.random_seed = np.arange(self.batch_size)
         
         self.rnd = StackedRandomGenerator(self.device, self.random_seed)
