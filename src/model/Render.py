@@ -14,6 +14,35 @@ class Renderer(nn.Module):
         self.volume_encoder = FeatureVolumeEncoder()
         self.mlp_nerf = MLP_Nerf()
 
+
+    def forward_volume(self, images):
+        # for inference purpose
+        # b, _, h, w = images.shape
+        volumes = self.volume_encoder(images)
+        return volumes
+
+    def render_from_volumes(self, batch_rays, volumes):
+        # batch_rays  batch, sample_points, render_h, render_w, 3
+        # volumes     batch, sample_points, h, w, feature_channel
+
+        points, deltas, z_samp = sample_coarse_points(batch_rays)
+        sampled_features = sample_from_3dgrid(volumes, points)
+
+        # Note
+        # this function is used with only 1 condition images so we dont need to average the feature map
+
+        sb, sample_points, render_h, render_w, c = sampled_features.shape
+
+        point_features = self.mlp_nerf(sampled_features.reshape(sb, -1 , c))        # super_batch, n_samples * render_h * render_w, 17
+        point_features = point_features.reshape(sb, sample_points, render_h, render_w, -1)        # super_batch, n_samples, render_h, render_w, 17
+        out = composite(point_features, deltas[:sb,...], z_samp[:sb,...])
+
+        rgb_final = out["rgb_final"]
+        depth_final = out["depth_final"]
+
+        return rgb_final, depth_final
+
+
     def forward(self, images, target_rays):
         # images = data["train_images"]                                               # super_batch, 3, 3, 128, 128
         # target_images = data["target_images"]                                       # super_batch, 1, 3, 128, 128

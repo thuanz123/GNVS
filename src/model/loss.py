@@ -76,9 +76,9 @@ class EDMLoss:
         y, augment_labels = augment_pipe(target_images) if augment_pipe is not None else (target_images, None)
         n = torch.randn_like(y) * sigma
 
-        D_yn = net(noised_images=y + n, cond_images=train_images, target_rays=target_rays, \
-                                            sigma=sigma, class_labels=None, augment_labels=augment_labels)
+        D_yn, feature_maps, depth_final = net(noised_images=y + n, cond_images=train_images, target_rays=target_rays, \
+                                            sigma=sigma, class_labels=None, cond_features=None, augment_labels=augment_labels)
         loss = weight * ((D_yn - y) ** 2)
-        return loss, target_images, D_yn, y + n
+        return loss, target_images, D_yn, y + n, feature_maps, depth_final
 
 #----------------------------------------------------------------------------

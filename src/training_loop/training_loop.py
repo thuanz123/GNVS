@@ -16,11 +16,13 @@ import psutil
 import numpy as np
 import torch
 import PIL
+import imageio
 
 from src import dnnlib
 from src.torch_utils import distributed as dist
 from src.torch_utils import training_stats
 from src.torch_utils import misc
+from src.sample.sample import Sample
 
 def save_image_grid(img, fname, drange, grid_size):
     lo, hi = drange
@@ -39,6 +41,18 @@ def save_image_grid(img, fname, drange, grid_size):
         PIL.Image.fromarray(img[:, :, 0], 'L').save(fname)
     if C == 3:
         PIL.Image.fromarray(img, 'RGB').save(fname)
+
+
+def convert_torch_to_np(images, value_range=[-1, 1]):
+    images = images.permute(0, 2, 3, 1).cpu().numpy()   # batch, c, h, w -> batch, h, w, c
+    lo, hi = value_range
+
+    images = np.asarray(images, dtype=np.float32)
+
+    images = (images - lo) * (255 / (hi - lo))
+    images = np.rint(images).clip(0, 255).astype(np.uint8)
+
+    return images
 
 #----------------------------------------------------------------------------
 
@@ -89,6 +103,20 @@ def training_loop(
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed)
     dataset_iterator = iter(torch.utils.data.DataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     
+
+    # Load test dataset
+    if dist.get_rank() == 0:
+        from src.dataset.SRNDataset import TestSRNDataset
+
+        config_path = '/lustre/scratch/client/vinai/users/tungdt33/GNVS/training-runs/00005-train_ShapeNet-uncond-ddpmpp-edm-gpus4-batch64-fp32/training_options.json'
+
+        sampler = Sample(config_path, device)
+
+
+        dist.print0('Loading test dataset...')
+        test_dataset_obj = TestSRNDataset(dataset_train_kwargs["path"], stage="test", image_size=(128, 128), world_scale=1.0)
+        test_dataset_sampler = misc.InfiniteSampler(dataset=test_dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed)
+        test_dataset_iterator = iter(torch.utils.data.DataLoader(dataset=test_dataset_obj, sampler=test_dataset_sampler, batch_size=1, **data_loader_kwargs))
     
     # Construct network.
     dist.print0('Constructing network...')
@@ -154,9 +182,8 @@ def training_loop(
 
                 target_rays = data["target_rays"].to(device)
                 target_images = data["target_images"].to(device).to(torch.float32) 
-                target_images = target_images.reshape(target_images.shape[0], 3, target_images.shape[-2], target_images.shape[-1])                          # super_batch, 1, 3, 128, 128
 
-                loss, _, _, _ = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
+                loss, _, _, _, _, _ = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
         
@@ -202,7 +229,7 @@ def training_loop(
             done = True
             dist.print0()
             dist.print0('Aborting...')
-
+        
 
         if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0):
             print("Save network snapshot")
@@ -225,26 +252,50 @@ def training_loop(
 
                     target_rays = data["target_rays"].to(device)
                     target_images = data["target_images"].to(device).to(torch.float32)
-                    target_images = target_images.reshape(target_images.shape[0], 3, target_images.shape[-2], target_images.shape[-1])                          # super_batch, 1, 3, 128, 128
 
-                    loss, target_images, D_yn, noises = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
+                    loss, target_images, D_yn, noises, feature_maps, depth_final = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
                     
-                    np_target_images = target_images.cpu().numpy()
-                    np_D_yn = D_yn.cpu().numpy()
-                    np_loss = loss.cpu().numpy()
-                    np_noises = noises.cpu().numpy()
+                    target_images = target_images.cpu().numpy()
+                    D_yn = D_yn.cpu().numpy()
+                    loss = loss.cpu().numpy()
+                    noises = noises.cpu().numpy()
+
+                    feature_maps = feature_maps.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
+                    feature_maps -= feature_maps.min(dim=1, keepdim=True)[0]
+                    feature_maps /= feature_maps.max(dim=1, keepdim=True)[0]
+                    feature_maps = feature_maps.cpu().numpy()
+
+                    depth_final = depth_final.repeat(1, 3, 1, 1)
+                    depth_final -= depth_final.min(dim=1, keepdim=True)[0]
+                    depth_final /= depth_final.max(dim=1, keepdim=True)[0]
+                    depth_final = depth_final.cpu().numpy()
 
 
-                    target_images = []
-                    for image in np_target_images:
-                        target_images.append(image)
-
-                    # np.vstack(target_images).shape
-
+                    save_image_grid(depth_final, os.path.join(run_dir, f'depth_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
+                    save_image_grid(feature_maps, os.path.join(run_dir, f'feature_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
                     save_image_grid(target_images, os.path.join(run_dir, f'target_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
-                    save_image_grid(np_D_yn, os.path.join(run_dir, f'denoises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
-                    save_image_grid(np_loss, os.path.join(run_dir, f'loss_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
-                    save_image_grid(np_noises, os.path.join(run_dir, f'noises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+                    save_image_grid(D_yn, os.path.join(run_dir, f'denoises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+                    save_image_grid(loss, os.path.join(run_dir, f'loss_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+                    save_image_grid(noises, os.path.join(run_dir, f'noises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
+
+                    data = next(test_dataset_iterator)
+                    pred_rgb, target_images, depth_maps, feature_maps = sampler.test_ShapeNet(data, ddp.module)
+                    np_pred_rgb = convert_torch_to_np(pred_rgb)
+                    np_target_images = convert_torch_to_np(target_images)
+
+                    video_out = imageio.get_writer(os.path.join(run_dir, f'pred_video_{cur_nimg//1000:06d}.mp4'), mode='I', fps=20, codec='libx264')
+
+                    for image in np_pred_rgb:
+                        video_out.append_data(image)
+
+                    video_out.close()
+
+                    video_out = imageio.get_writer(os.path.join(run_dir, f'target_video_{cur_nimg//1000:06d}.mp4'), mode='I', fps=20, codec='libx264')
+
+                    for image in np_target_images:
+                        video_out.append_data(image)
+                        
+                    video_out.close()
 
 
         # Save full dump of the training state.

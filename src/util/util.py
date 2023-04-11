@@ -589,6 +589,12 @@ def sample_from_3dgrid(grid, coordinates):
     Returns sampled features of shape (batch_size, D, H, W, feature_channels)
     """
     batch_size, n_samples, h, w, n_dims = coordinates.shape
+    coordinates = coordinates.reshape(batch_size, n_samples*w*h, n_dims)
+    coordinates -= coordinates.min(dim=1, keepdim=True)[0]
+    coordinates /= coordinates.max(dim=1, keepdim=True)[0]
+    coordinates = coordinates * 2 - 1
+
+    coordinates = coordinates.reshape(batch_size, n_samples, h, w, n_dims)          # normalize point in range (-1, 1)
     sampled_features = torch.nn.functional.grid_sample(grid,
                                                        coordinates,
                                                        mode='bilinear', padding_mode='zeros', align_corners=False)

@@ -133,7 +133,7 @@ class TrainSRNDataset(torch.utils.data.Dataset):
         focal = torch.tensor(focal, dtype=torch.float32)
         c = torch.tensor([cx, cy], dtype=torch.float32)
 
-        # random select image
+        # random select number of condition image
         idx = np.random.choice(all_imgs.shape[0], 4)
         all_imgs = all_imgs[idx]
         all_poses = all_poses[idx]
@@ -147,7 +147,7 @@ class TrainSRNDataset(torch.utils.data.Dataset):
             "c": c,
 
             "train_images": all_imgs[:-1],
-            "target_images": all_imgs[-1].unsqueeze(0),
+            "target_images": all_imgs[-1],
 
             "train_poses": all_poses[:-1],
             "target_poses": all_poses[-1],
@@ -166,18 +166,14 @@ class TestSRNDataset(torch.utils.data.Dataset):
     """
 
     def __init__(
-        self, path, stage="train", image_size=(128, 128), world_scale=1.0, max_size=None):
+        self, path, stage="test", image_size=(128, 128), world_scale=1.0):
         """
         :param stage train | val | test
         :param image_size result image size (resizes if different)
         :param world_scale amount to scale entire world by
         """
-        super().__init__()
-        self.max_size = max_size
-        self.resolution = image_size
-        
-        self.name = "train_ShapeNet"
-
+        super().__init__()      
+        self.name = "test_ShapeNet"
         self.dataset_name = os.path.basename(path)
         self.base_path = os.path.join(path, self.dataset_name + "_" + stage)
 
@@ -214,6 +210,9 @@ class TestSRNDataset(torch.utils.data.Dataset):
 
         self.render_width = 64
         self.render_height = 64
+
+        self.cond_img_idx = 63
+
 
     def __len__(self):
         return len(self.intrins)
@@ -285,28 +284,21 @@ class TestSRNDataset(torch.utils.data.Dataset):
         focal = torch.tensor(focal, dtype=torch.float32)
         c = torch.tensor([cx, cy], dtype=torch.float32)
 
-        # random select image
-        idx = np.random.choice(all_imgs.shape[0], 4)
-        all_imgs = all_imgs[idx]
-        all_poses = all_poses[idx]
 
-        target_rays = gen_rays(all_poses[-1].unsqueeze(0), self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
+        cond_images = all_imgs[self.cond_img_idx,...]
+        target_images = cond_images.unsqueeze(0).repeat(250, 1, 1, 1)
+        target_poses = all_poses[self.cond_img_idx,...].repeat(250, 1, 1)
+
+        # target_images = torch.cat([all_imgs[:self.cond_img_idx,...], all_imgs[self.cond_img_idx + 1:,...]])
+        # target_poses = torch.cat([all_poses[:self.cond_img_idx,...], all_poses[self.cond_img_idx + 1:,...]])
+        target_rays = gen_rays(target_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
 
         result = {
-            "path": dir_path,
-            "img_id": index,
-            "focal": focal,
-            "c": c,
-
-            "train_images": all_imgs[:-1],
-            "target_images": all_imgs[-1].unsqueeze(0),
-
-            "train_poses": all_poses[:-1],
-            "target_poses": all_poses[-1],
+            "cond_images": cond_images,
+            "target_images": target_images,
+            "target_poses": target_poses,
             "target_rays": target_rays
         }
-
-
 
         return result
 

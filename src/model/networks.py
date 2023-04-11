@@ -656,8 +656,13 @@ class EDMPrecond(torch.nn.Module):
 
         self.renderer = Renderer()
 
-    def forward(self, noised_images, cond_images, target_rays, sigma, class_labels=None, force_fp32=False, **model_kwargs):
-        x, depth_final = self.renderer(cond_images, target_rays)
+    def forward(self, noised_images, cond_images, target_rays, sigma, class_labels=None, cond_features=None, force_fp32=False, **model_kwargs):
+        if cond_features is not None:
+            x = cond_features
+            depth_final = None
+        else:
+            x, depth_final = self.renderer(cond_images, target_rays)
+            
         x = torch.cat([noised_images, x], dim=1)
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
         class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
@@ -672,7 +677,7 @@ class EDMPrecond(torch.nn.Module):
         assert F_x.dtype == dtype
 
         D_x = c_skip * noised_images + c_out * F_x.to(torch.float32)
-        return D_x
+        return D_x, x, depth_final
 
     def round_sigma(self, sigma):
         return torch.as_tensor(sigma)
