@@ -45,7 +45,7 @@ class Sample:
         
         self.rnd = StackedRandomGenerator(self.device, self.random_seed)
 
-        self.config = json.load(open(config_path, "r"))
+        # self.config = json.load(open(config_path, "r"))
 
 
     def load_model(self, model_path):
@@ -111,17 +111,24 @@ class Sample:
             target_images = target_images.reshape(sb*mb, c, h, w)                   #  [250, 3, 128, 128]
             target_rays = target_rays.reshape(sb*mb, render_h, render_w, c_rays)    #  [250, 64, 64, 8]
 
-            cond_volume = net.renderer.forward_volume(cond_images)
-            cond_volume = cond_volume.repeat(sb*mb, 1, 1, 1, 1)                         #  [8, 16, 64, 128, 128]
+            cond_volume = net.renderer.forward_volume(cond_images)                  #  [1, 16, 64, 128, 128]            
+            
 
             # 250 image ----> split batch
             feature_maps = []
             depth_maps = []
             pred_rgbs = []
 
+
+            print("Mem before sampling: %fGB"%(torch.cuda.memory_allocated(0)/1024/1024/1024))
+
+
             for i in tqdm(range(0, target_images.shape[0], self.batch_size)):
                 end = target_images.shape[0] if i + self.batch_size > target_images.shape[0] else i + self.batch_size
-                feature_map, depth_map = net.renderer.render_from_volumes(batch_rays=target_rays[i:end,...], volumes=cond_volume[i:end,...])
+
+                print("Mem in sampling: %fGB"%(torch.cuda.memory_allocated(0)/1024/1024/1024))
+                batch_cond_volume = cond_volume.repeat(end-i, 1, 1, 1, 1)       #  [batch_size, 16, 64, 128, 128]
+                feature_map, depth_map = net.renderer.render_from_volumes(batch_rays=target_rays[i:end,...], volumes=batch_cond_volume)
                 pred_rgb = self.sample(cond_feature_map=feature_map, net=net, batch_size=self.batch_size)
 
                 feature_maps.append(feature_map)

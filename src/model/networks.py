@@ -658,12 +658,12 @@ class EDMPrecond(torch.nn.Module):
 
     def forward(self, noised_images, cond_images, target_rays, sigma, class_labels=None, cond_features=None, force_fp32=False, **model_kwargs):
         if cond_features is not None:
-            x = cond_features
+            feature_maps = cond_features
             depth_final = None
         else:
-            x, depth_final = self.renderer(cond_images, target_rays)
-            
-        x = torch.cat([noised_images, x], dim=1)
+            feature_maps, depth_final = self.renderer(cond_images, target_rays)
+        
+        x = noised_images
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
         class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
         dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
@@ -672,12 +672,15 @@ class EDMPrecond(torch.nn.Module):
         c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
         c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
         c_noise = sigma.log() / 4
+        
+        x = c_in * x
+        input_ddpm = torch.cat([x, feature_maps], dim=1).to(dtype)
 
-        F_x = self.model((c_in * x).to(dtype), c_noise.flatten(), class_labels=class_labels, **model_kwargs)
+        F_x = self.model(input_ddpm, c_noise.flatten(), class_labels=class_labels, **model_kwargs)
         assert F_x.dtype == dtype
 
         D_x = c_skip * noised_images + c_out * F_x.to(torch.float32)
-        return D_x, x, depth_final
+        return D_x, feature_maps, depth_final
 
     def round_sigma(self, sigma):
         return torch.as_tensor(sigma)

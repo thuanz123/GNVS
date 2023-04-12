@@ -19,6 +19,7 @@ import PIL
 import imageio
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from sklearn.decomposition import PCA
 
 from src import dnnlib
 from src.torch_utils import distributed as dist
@@ -204,6 +205,7 @@ def training_loop(
     maintenance_time = tick_start_time - start_time
     dist.update_progress(cur_nimg // 1000, total_kimg)
     stats_jsonl = None
+
     while True:
 
         # Accumulate gradients.
@@ -297,19 +299,48 @@ def training_loop(
                     loss = loss.cpu().numpy()
                     noises = noises.cpu().numpy()
 
-                    feature_maps = feature_maps.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
-                    feature_maps -= feature_maps.min(dim=1, keepdim=True)[0]
-                    feature_maps /= feature_maps.max(dim=1, keepdim=True)[0]
-                    feature_maps = feature_maps.cpu().numpy()
-
-                    depth_final = depth_final.repeat(1, 3, 1, 1)
-                    depth_final -= depth_final.min(dim=1, keepdim=True)[0]
-                    depth_final /= depth_final.max(dim=1, keepdim=True)[0]
+                    # feature_maps = feature_maps.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
+                    # # feature_maps -= feature_maps.min(dim=1, keepdim=True)[0]
+                    # # feature_maps /= feature_maps.max(dim=1, keepdim=True)[0]
+                    # # feature_maps = feature_maps.cpu().numpy()
+                    depth_final = (depth_final- depth_final.min())/(depth_final.max() - depth_final.min())
+                    # depth_final /= depth_final.max(dim=1, keepdim=True)[0]
                     depth_final = depth_final.cpu().numpy()
+                    batch_feature_map_pixels = []
+
+
+                    for i, feature_map in enumerate(feature_maps):
+                        feature_map = feature_map.unsqueeze(1).repeat(1, 3, 1, 1)
+                        feature_map = (feature_map - feature_map.min()) / (feature_map.max() - feature_map.min())
+                        feature_map = feature_map.cpu().numpy()
+                        save_image_grid(feature_map, os.path.join(run_dir, f'feat_{i}_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
+
+
+
+                    for feature_map in feature_maps:
+                        # feature_map = feature_maps[:, i,...]
+                        # feature_map = feature_map.unsqueeze(1).repeat(1, 3, 1, 1)
+                        # feature_map = (feature_map - feature_map.min()) / (feature_map.max() - feature_map.min())
+                        # feature_map = feature_map.cpu().numpy()
+                        # save_image_grid(feature_map, os.path.join(run_dir, f'feat_{i}_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
+
+                        feature_map_pixels = feature_map.permute(1, 2, 0).cpu().numpy().reshape(feature_map.shape[0], -1).transpose(1, 0)
+                        feature_map_pixels = PCA(n_components=3).fit_transform(feature_map_pixels)
+                        feature_map_pixels = feature_map_pixels.transpose(1, 0).reshape(3, 128, 128)
+
+                        feature_map_pixels = (feature_map_pixels - feature_map_pixels.min()) / (feature_map_pixels.max() - feature_map_pixels.min())
+                        feature_map_pixels = torch.tensor(feature_map_pixels, dtype=torch.float32, device=device)
+
+                        batch_feature_map_pixels.append(feature_map_pixels.unsqueeze(0))
+
+                    features_map = torch.cat(batch_feature_map_pixels).cpu().numpy()
+
+
+
 
 
                     save_image_grid(depth_final, os.path.join(run_dir, f'depth_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
-                    save_image_grid(feature_maps, os.path.join(run_dir, f'feature_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
+                    save_image_grid(features_map, os.path.join(run_dir, f'feature_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
                     save_image_grid(target_images, os.path.join(run_dir, f'target_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
                     save_image_grid(D_yn, os.path.join(run_dir, f'denoises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
                     save_image_grid(loss, os.path.join(run_dir, f'loss_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
@@ -317,6 +348,7 @@ def training_loop(
 
                     data = next(test_dataset_iterator)
                     pred_rgb, target_images, depth_maps, feature_maps = sampler.test_ShapeNet(data, ddp.module)
+                    print("Mem after sampling: %fGB"%(torch.cuda.memory_allocated(0)/1024/1024/1024))
                     np_pred_rgb = convert_torch_to_np(pred_rgb)
                     np_target_images = convert_torch_to_np(target_images)
 
