@@ -37,26 +37,26 @@ def plot_grad_flow(named_parameters, saved_path):
     max_grads= []
     layers = []
     for n, p in named_parameters:
-        if(p.requires_grad) and ("bias" not in n) and ("module.renderer" in n):
+        if(p.requires_grad) and ("bias" not in n) and ("render" in n):
             layers.append(n)
-            print(n, p.grad.detach().abs().mean().cpu().numpy())
-            ave_grads.append(p.grad.detach().abs().mean().cpu().numpy())
-            max_grads.append(p.grad.detach().abs().max().cpu().numpy())
+            print(n, p.grad.abs().mean()) #.abs().mean())
+            # ave_grads.append(p.grad.detach().abs().mean().cpu().numpy())
+            # max_grads.append(p.grad.detach().abs().max().cpu().numpy())
 
-    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
-    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
-    plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
-    plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
-    plt.xlim(left=0, right=len(ave_grads))
-    plt.ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
-    plt.xlabel("Layers")
-    plt.ylabel("average gradient")
-    plt.title("Gradient flow")
-    plt.grid(True)
-    plt.legend([Line2D([0], [0], color="c", lw=4),
-                Line2D([0], [0], color="b", lw=4),
-                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
-    plt.savefig(saved_path)
+    # plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    # plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    # plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
+    # plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
+    # plt.xlim(left=0, right=len(ave_grads))
+    # plt.ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
+    # plt.xlabel("Layers")
+    # plt.ylabel("average gradient")
+    # plt.title("Gradient flow")
+    # plt.grid(True)
+    # plt.legend([Line2D([0], [0], color="c", lw=4),
+    #             Line2D([0], [0], color="b", lw=4),
+    #             Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+    # plt.savefig(saved_path)
 
 def save_image_grid(img, fname, drange, grid_size):
     lo, hi = drange
@@ -92,6 +92,7 @@ def convert_torch_to_np(images, value_range=[-1, 1]):
 
 def training_loop(
     run_dir             = '.',      # Output directory.
+    norm_src            = False,
     dataset_train_kwargs      = {},       # Options for training set.
     data_loader_kwargs  = {},       # Options for torch.utils.data.DataLoader.
     network_kwargs      = {},       # Options for model and preconditioning.
@@ -207,18 +208,19 @@ def training_loop(
     stats_jsonl = None
 
     while True:
-
+            
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
                 data = next(dataset_iterator)
                 train_images = data["train_images"].to(device).to(torch.float32)
+                train_rays =  data["train_rays"].to(device).to(torch.float32)
 
                 target_rays = data["target_rays"].to(device)
                 target_images = data["target_images"].to(device).to(torch.float32) 
 
-                loss, _, _, _, _, _ = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
+                loss, _, _, _, _, _ = loss_fn(net=ddp, train_images=train_images, train_rays=train_rays, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe, norm_src=norm_src)
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 
@@ -288,11 +290,13 @@ def training_loop(
                 with torch.no_grad():
                     data = next(dataset_iterator)
                     train_images = data["train_images"].to(device).to(torch.float32) 
+                    train_rays =  data["train_rays"].to(device).to(torch.float32)
+
 
                     target_rays = data["target_rays"].to(device)
                     target_images = data["target_images"].to(device).to(torch.float32)
 
-                    loss, target_images, D_yn, noises, feature_maps, depth_final = loss_fn(net=ddp, train_images=train_images, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe)
+                    loss, target_images, D_yn, noises, feature_maps, depth_final = loss_fn(net=ddp, train_images=train_images, train_rays=train_rays, target_images=target_images, target_rays=target_rays, augment_pipe=augment_pipe, norm_src=norm_src)
                     
                     target_images = target_images.cpu().numpy()
                     D_yn = D_yn.cpu().numpy()
@@ -309,32 +313,36 @@ def training_loop(
                     batch_feature_map_pixels = []
 
 
-                    for i, feature_map in enumerate(feature_maps):
+                    # for i, feature_map in enumerate(feature_maps):
+                    #     feature_map = feature_map.unsqueeze(1).repeat(1, 3, 1, 1)
+                    #     feature_map = (feature_map - feature_map.min()) / (feature_map.max() - feature_map.min())
+                    #     feature_map = feature_map.cpu().numpy()
+                    #     save_image_grid(feature_map, os.path.join(run_dir, f'feat_{i}_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
+
+
+                    
+                    for feature_map in feature_maps:
+                        feature_map = feature_map.mean(dim=0, keepdim=True)
                         feature_map = feature_map.unsqueeze(1).repeat(1, 3, 1, 1)
                         feature_map = (feature_map - feature_map.min()) / (feature_map.max() - feature_map.min())
-                        feature_map = feature_map.cpu().numpy()
-                        save_image_grid(feature_map, os.path.join(run_dir, f'feat_{i}_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
-
-
-
-                    for feature_map in feature_maps:
+                        batch_feature_map_pixels.append(feature_map)
                         # feature_map = feature_maps[:, i,...]
                         # feature_map = feature_map.unsqueeze(1).repeat(1, 3, 1, 1)
                         # feature_map = (feature_map - feature_map.min()) / (feature_map.max() - feature_map.min())
                         # feature_map = feature_map.cpu().numpy()
                         # save_image_grid(feature_map, os.path.join(run_dir, f'feat_{i}_{cur_nimg//1000:06d}.png'), drange=[0, 1], grid_size=(4,4))
 
-                        feature_map_pixels = feature_map.permute(1, 2, 0).cpu().numpy().reshape(feature_map.shape[0], -1).transpose(1, 0)
-                        feature_map_pixels = PCA(n_components=3).fit_transform(feature_map_pixels)
-                        feature_map_pixels = feature_map_pixels.transpose(1, 0).reshape(3, 128, 128)
 
-                        feature_map_pixels = (feature_map_pixels - feature_map_pixels.min()) / (feature_map_pixels.max() - feature_map_pixels.min())
-                        feature_map_pixels = torch.tensor(feature_map_pixels, dtype=torch.float32, device=device)
+                        # feature_map_pixels = feature_map.permute(1, 2, 0).cpu().numpy().reshape(feature_map.shape[0], -1).transpose(1, 0)
+                        # feature_map_pixels = PCA(n_components=3).fit_transform(feature_map_pixels)
+                        # feature_map_pixels = feature_map_pixels.transpose(1, 0).reshape(3, 128, 128)
 
-                        batch_feature_map_pixels.append(feature_map_pixels.unsqueeze(0))
+                        # feature_map_pixels = (feature_map_pixels - feature_map_pixels.min()) / (feature_map_pixels.max() - feature_map_pixels.min())
+                        # feature_map_pixels = torch.tensor(feature_map_pixels, dtype=torch.float32, device=device)
+
+                        # batch_feature_map_pixels.append(feature_map_pixels.unsqueeze(0))
 
                     features_map = torch.cat(batch_feature_map_pixels).cpu().numpy()
-
 
 
 
@@ -347,7 +355,7 @@ def training_loop(
                     save_image_grid(noises, os.path.join(run_dir, f'noises_{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=(4,4))
 
                     data = next(test_dataset_iterator)
-                    pred_rgb, target_images, depth_maps, feature_maps = sampler.test_ShapeNet(data, ddp.module)
+                    pred_rgb, target_images, depth_maps, feature_maps = sampler.test_ShapeNet(data, ddp.module, norm_src)
                     print("Mem after sampling: %fGB"%(torch.cuda.memory_allocated(0)/1024/1024/1024))
                     np_pred_rgb = convert_torch_to_np(pred_rgb)
                     np_target_images = convert_torch_to_np(target_images)

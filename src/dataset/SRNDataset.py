@@ -70,71 +70,25 @@ class TrainSRNDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         intrin_path = self.intrins[index]
         dir_path = os.path.dirname(intrin_path)
-        rgb_paths = sorted(glob.glob(os.path.join(dir_path, "rgb", "*")))
-        pose_paths = sorted(glob.glob(os.path.join(dir_path, "pose", "*")))
 
-        assert len(rgb_paths) == len(pose_paths)
-
-        with open(intrin_path, "r") as intrinfile:
-            lines = intrinfile.readlines()
-            focal, cx, cy, _ = map(float, lines[0].split())
-            height, width = map(int, lines[-1].split())
-
-        all_imgs = []
-        all_poses = []
-
-        for rgb_path, pose_path in zip(rgb_paths, pose_paths):
-            img = imageio.imread(rgb_path)[..., :3]
-            img_tensor = self.image_to_tensor(img)
-
-            pose = torch.from_numpy(
-                np.loadtxt(pose_path, dtype=np.float32).reshape(4, 4)
-            )
-            pose = pose @ self._coord_trans
-
-            all_imgs.append(img_tensor)
-            all_poses.append(pose)
-
-        all_imgs = torch.stack(all_imgs)
-        all_poses = torch.stack(all_poses)
-
-        if all_imgs.shape[-2:] != self.render_size:
-            scale = self.render_size[0] / all_imgs.shape[-2]
-            focal *= scale
-            cx *= scale
-            cy *= scale
-
-            all_imgs = F.interpolate(all_imgs, size=self.image_size, mode="area")
-
-        if self.world_scale != 1.0:
-            focal *= self.world_scale
-            all_poses[:, :3, 3] *= self.world_scale
-
-        focal = torch.tensor(focal, dtype=torch.float32)
-        c = torch.tensor([cx, cy], dtype=torch.float32)
+        images_path = os.path.join(os.path.join(dir_path, "images_128"), "images.pt")
+        rays_path = os.path.join(os.path.join(dir_path, "rays_64"), "rays.pt")
+        
+        all_imgs = torch.load(images_path)
+        all_rays = torch.load(rays_path)
 
         # random select number of condition image
         idx = np.random.choice(all_imgs.shape[0], 4)
         all_imgs = all_imgs[idx]
-        all_poses = all_poses[idx]
-
-        target_rays = gen_rays(all_poses[-1].unsqueeze(0), self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
-        
+        all_rays = all_rays[idx]
+         
         result = {
-            "path": dir_path,
-            "img_id": index,
-            "focal": focal,
-            "c": c,
-
             "train_images": all_imgs[:-1],
+            "train_rays": all_rays[:-1],
             "target_images": all_imgs[-1],
-
-            "train_poses": all_poses[:-1],
-            "target_poses": all_poses[-1],
-            "target_rays": target_rays
+            "target_rays": all_rays[-1],
+            
         }
-
-
 
         return result
 
@@ -192,8 +146,150 @@ class TestSRNDataset(torch.utils.data.Dataset):
         self.render_width = 64
         self.render_height = 64
 
-        self.cond_img_idx = 63
+        self.cond_img_idx = 100
 
+
+    def __len__(self):
+        return len(self.intrins)
+
+    def __getitem__(self, index):
+        intrin_path = self.intrins[index]
+        dir_path = os.path.dirname(intrin_path)
+   
+        images_path = os.path.join(os.path.join(dir_path, "images_128"), "images.pt")
+        rays_path = os.path.join(os.path.join(dir_path, "rays_64"), "rays.pt")
+        
+        all_imgs = torch.load(images_path)
+        all_rays = torch.load(rays_path)
+
+        cond_images = all_imgs[self.cond_img_idx,...]
+        
+        target_images = cond_images.unsqueeze(0).repeat(250, 1, 1, 1)
+        target_rays = all_rays[self.cond_img_idx,...].repeat(250, 1, 1, 1)
+
+        # target_images = torch.cat([all_imgs[:self.cond_img_idx,...], all_imgs[self.cond_img_idx + 1:,...]])
+        # target_poses = torch.cat([all_poses[:self.cond_img_idx,...], all_poses[self.cond_img_idx + 1:,...]])
+        # target_rays = gen_rays(target_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
+
+        result = {
+            "cond_images": cond_images,
+            "target_images": target_images,
+            "target_rays": target_rays
+        }
+
+        return result
+
+
+        # for rgb_path, pose_path in zip(rgb_paths, pose_paths):
+        #     img = imageio.imread(rgb_path)[..., :3]
+        #     img_tensor = self.image_to_tensor(img)
+
+
+        #     pose = torch.from_numpy(
+        #         np.loadtxt(pose_path, dtype=np.float32).reshape(4, 4)
+        #     )
+        #     pose = pose @ self._coord_trans
+
+
+        #     all_imgs.append(img_tensor)
+        #     all_poses.append(pose)
+
+        # all_imgs = torch.stack(all_imgs)
+        # all_poses = torch.stack(all_poses)
+
+        # if all_imgs.shape[-2:] != self.render_size:
+        #     scale = self.render_size[0] / all_imgs.shape[-2]
+        #     focal *= scale
+        #     cx *= scale
+        #     cy *= scale
+
+        #     all_imgs = F.interpolate(all_imgs, size=self.image_size, mode="area")
+
+        # if self.world_scale != 1.0:
+        #     focal *= self.world_scale
+        #     all_poses[:, :3, 3] *= self.world_scale
+
+        # focal = torch.tensor(focal, dtype=torch.float32)
+        # c = torch.tensor([cx, cy], dtype=torch.float32)
+
+
+        # cond_images = all_imgs[self.cond_img_idx,...]
+        
+        # target_images = cond_images.unsqueeze(0).repeat(250, 1, 1, 1)
+        # target_poses = all_poses[self.cond_img_idx,...].repeat(250, 1, 1)
+
+        # # target_images = torch.cat([all_imgs[:self.cond_img_idx,...], all_imgs[self.cond_img_idx + 1:,...]])
+        # # target_poses = torch.cat([all_poses[:self.cond_img_idx,...], all_poses[self.cond_img_idx + 1:,...]])
+        # target_rays = gen_rays(target_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
+
+        # result = {
+        #     "cond_images": cond_images,
+        #     "target_images": target_images,
+        #     "target_poses": target_poses,
+        #     "target_rays": target_rays
+        # }
+
+        # return result
+
+
+import time
+class ProcessSRNDataset(torch.utils.data.Dataset):
+    """
+    Dataset from SRN (V. Sitzmann et al. 2020)
+    """
+
+    def __init__(
+        self, path, stage="train", image_size=(128, 128), world_scale=1.0, render_size=(64, 64), use_labels=False, max_size=None, resolution=None):
+        """
+        :param stage train | val | test
+        :param image_size result image size (resizes if different)
+        :param world_scale amount to scale entire world by
+        """
+        super().__init__()
+        self.max_size = max_size
+        self.resolution = image_size
+        self.use_labels = use_labels
+
+
+        self.name = "train_ShapeNet"
+
+        self.dataset_name = os.path.basename(path)
+        self.base_path = os.path.join(path, self.dataset_name + "_" + stage)
+
+        print("Loading SRN dataset", self.base_path, "name:", self.dataset_name)
+        self.stage = stage
+        assert os.path.exists(self.base_path)
+
+        is_chair = "chair" in self.dataset_name
+        if is_chair and stage == "train":
+            # Ugly thing from SRN's public dataset
+            tmp = os.path.join(self.base_path, "chairs_2.0_train")
+            if os.path.exists(tmp):
+                self.base_path = tmp
+
+        self.intrins = sorted(
+            glob.glob(os.path.join(self.base_path, "*", "intrinsics.txt"))
+        )
+        self.image_to_tensor = get_image_to_tensor_balanced()
+        self.mask_to_tensor = get_mask_to_tensor()
+
+        self.render_size = render_size
+        self.image_size = image_size
+        self.world_scale = world_scale
+        self._coord_trans = torch.diag(
+            torch.tensor([1, -1, -1, 1], dtype=torch.float32)
+        )
+
+        if is_chair:
+            self.z_near = 1.25
+            self.z_far = 2.75
+        else:
+            self.z_near = 0.8
+            self.z_far = 1.8
+        self.lindisp = False
+
+        self.render_width = 64
+        self.render_height = 64
 
     def __len__(self):
         return len(self.intrins)
@@ -218,12 +314,10 @@ class TestSRNDataset(torch.utils.data.Dataset):
             img = imageio.imread(rgb_path)[..., :3]
             img_tensor = self.image_to_tensor(img)
 
-
             pose = torch.from_numpy(
                 np.loadtxt(pose_path, dtype=np.float32).reshape(4, 4)
             )
             pose = pose @ self._coord_trans
-
 
             all_imgs.append(img_tensor)
             all_poses.append(pose)
@@ -245,133 +339,19 @@ class TestSRNDataset(torch.utils.data.Dataset):
 
         focal = torch.tensor(focal, dtype=torch.float32)
         c = torch.tensor([cx, cy], dtype=torch.float32)
-
-
-        cond_images = all_imgs[self.cond_img_idx,...]
-        target_images = cond_images.unsqueeze(0).repeat(250, 1, 1, 1)
-        target_poses = all_poses[self.cond_img_idx,...].repeat(250, 1, 1)
-
-        # target_images = torch.cat([all_imgs[:self.cond_img_idx,...], all_imgs[self.cond_img_idx + 1:,...]])
-        # target_poses = torch.cat([all_poses[:self.cond_img_idx,...], all_poses[self.cond_img_idx + 1:,...]])
-        target_rays = gen_rays(target_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
-
-        result = {
-            "cond_images": cond_images,
-            "target_images": target_images,
-            "target_poses": target_poses,
-            "target_rays": target_rays
-        }
-
-        return result
-
-
-
-class SRNDataset(torch.utils.data.Dataset):
-    """
-    Dataset from SRN (V. Sitzmann et al. 2020)
-    """
-
-    def __init__(
-        self, path, stage="train", image_size=(128, 128), render_size=(64, 64), world_scale=1.0,
-    ):
-        """
-        :param stage train | val | test
-        :param image_size result image size (resizes if different)
-        :param world_scale amount to scale entire world by
-        """
-        super().__init__()
-        self.dataset_name = os.path.basename(path)
-        self.base_path = os.path.join(path, self.dataset_name + "_" + stage)
-
-        print("Loading SRN dataset", self.base_path, "name:", self.dataset_name)
-        self.stage = stage
-        assert os.path.exists(self.base_path)
-
-        is_chair = "chair" in self.dataset_name
-        if is_chair and stage == "train":
-            # Ugly thing from SRN's public dataset
-            tmp = os.path.join(self.base_path, "chairs_2.0_train")
-            if os.path.exists(tmp):
-                self.base_path = tmp
-
-        self.intrins = sorted(
-            glob.glob(os.path.join(self.base_path, "*", "intrinsics.txt"))
-        )
-        self.image_to_tensor = get_image_to_tensor_balanced()
-        self.mask_to_tensor = get_mask_to_tensor()
-
-        self.image_size = image_size
-        self.render_size = render_size
-        self.world_scale = world_scale
-        self._coord_trans = torch.diag(
-            torch.tensor([1, -1, -1, 1], dtype=torch.float32)
-        )
-
-        if is_chair:
-            self.z_near = 1.25
-            self.z_far = 2.75
-        else:
-            self.z_near = 0.8
-            self.z_far = 1.8
-        self.lindisp = False
-
-    def __len__(self):
-        return len(self.intrins)
-
-    def __getitem__(self, index):
-        intrin_path = self.intrins[index]
-        dir_path = os.path.dirname(intrin_path)
-        rgb_paths = sorted(glob.glob(os.path.join(dir_path, "rgb", "*")))
-        pose_paths = sorted(glob.glob(os.path.join(dir_path, "pose", "*")))
-
-        assert len(rgb_paths) == len(pose_paths)
-
-        with open(intrin_path, "r") as intrinfile:
-            lines = intrinfile.readlines()
-            focal, cx, cy, _ = map(float, lines[0].split())
-            height, width = map(int, lines[-1].split())
-
-        all_imgs = []
-        all_poses = []
-        all_masks = []
-        all_bboxes = []
-        for rgb_path, pose_path in zip(rgb_paths, pose_paths):
-            img = imageio.imread(rgb_path)[..., :3]
-            img_tensor = self.image_to_tensor(img)
-          
-            pose = torch.from_numpy(
-                np.loadtxt(pose_path, dtype=np.float32).reshape(4, 4)
-            )
-            pose = pose @ self._coord_trans
-
-
-            all_imgs.append(img_tensor)
-            all_poses.append(pose)
-
-
-        all_imgs = torch.stack(all_imgs)
-        all_poses = torch.stack(all_poses)
-
-
-        if all_imgs.shape[-2:] != self.render_size:
-            scale = self.render_size[0] / all_imgs.shape[-2]
-            focal *= scale
-            cx *= scale
-            cy *= scale
-
-            all_imgs = F.interpolate(all_imgs, size=self.image_size, mode="area")
-
-        if self.world_scale != 1.0:
-            focal *= self.world_scale
-            all_poses[:, :3, 3] *= self.world_scale
-        focal = torch.tensor(focal, dtype=torch.float32)
-
+        
+        all_rays = gen_rays(all_poses, self.render_width, self.render_height, focal, self.z_near, self.z_far, c=c, ndc=False)
+        
         result = {
             "path": dir_path,
             "img_id": index,
             "focal": focal,
-            "c": torch.tensor([cx, cy], dtype=torch.float32),
-            "images": all_imgs,
-            "poses": all_poses,
+            "c": c,
+            
+            "all_imgs": all_imgs,
+            "all_rays": all_rays
         }
+
+
+
         return result

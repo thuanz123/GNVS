@@ -83,7 +83,7 @@ class Sample:
             x_hat = x_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * self.S_noise * self.randn_like(x_cur)
 
             # Euler step.
-            denoised, _, _ = net(noised_images=x_hat, cond_images=None, target_rays=None, sigma=t_hat, class_labels=None, cond_features=cond_feature_map)
+            denoised, _, _ = net(noised_images=x_hat, cond_images=None, cond_rays=None, target_rays=None, sigma=t_hat, class_labels=None, cond_features=cond_feature_map)
             denoised = denoised.to(torch.float64)
 
             d_cur = (x_hat - denoised) / t_hat
@@ -91,7 +91,7 @@ class Sample:
 
             # Apply 2nd order correction.
             if i < self.num_steps - 1:
-                denoised, _, _ = net(noised_images=x_next, cond_images=None, target_rays=None, sigma=t_next, class_labels=None, cond_features=cond_feature_map)
+                denoised, _, _ = net(noised_images=x_next, cond_images=None, cond_rays=None, target_rays=None, sigma=t_next, class_labels=None, cond_features=cond_feature_map)
                 denoised = denoised.to(torch.float64)
                 d_prime = (x_next - denoised) / t_next
                 x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
@@ -99,12 +99,11 @@ class Sample:
         return x_next
 
 
-    def test_ShapeNet(self, data, net):
+    def test_ShapeNet(self, data, net, norm_src):
         with torch.no_grad():
             cond_images = data["cond_images"].to(self.device)                       #  [1, 3, 128, 128]
             target_images = data["target_images"].to(self.device)                   #  [1, 250, 3, 128, 128]
             target_rays = data["target_rays"].to(self.device)                       #  [1, 250, 64, 64, 8]
-
             sb, mb, c, h, w = target_images.shape
             sb, mb, render_h, render_w, c_rays = target_rays.shape
 
@@ -128,7 +127,7 @@ class Sample:
 
                 print("Mem in sampling: %fGB"%(torch.cuda.memory_allocated(0)/1024/1024/1024))
                 batch_cond_volume = cond_volume.repeat(end-i, 1, 1, 1, 1)       #  [batch_size, 16, 64, 128, 128]
-                feature_map, depth_map = net.renderer.render_from_volumes(batch_rays=target_rays[i:end,...], volumes=batch_cond_volume)
+                feature_map, depth_map = net.renderer.render_from_volumes(batch_rays=target_rays[i:end,...], volumes=batch_cond_volume, norm_src=norm_src)
                 pred_rgb = self.sample(cond_feature_map=feature_map, net=net, batch_size=self.batch_size)
 
                 feature_maps.append(feature_map)

@@ -78,6 +78,8 @@ def parse_int_list(s):
 @click.option('--resume',        help='Resume from previous training state', metavar='PT',          type=str)
 @click.option('-n', '--dry-run', help='Print training options and exit',                            is_flag=True)
 
+@click.option('--norm',         help='Normalize target frustum w.r.t source frustum', metavar='BOOL',                type=bool, default=False, show_default=True)
+
 def main(**kwargs):
     """Train diffusion-based generative model using the techniques described in the
     paper "Elucidating the Design Space of Diffusion-Based Generative Models".
@@ -95,7 +97,9 @@ def main(**kwargs):
 
     # Initialize config dict.
     c = dnnlib.EasyDict()
-
+    
+    c.norm_src = opts.norm
+    
     c.dataset_train_kwargs = dnnlib.EasyDict(class_name='src.dataset.SRNDataset.TrainSRNDataset', path=opts.data, use_labels=False,stage="train", image_size=(128, 128), world_scale=1.0)
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=opts.workers, prefetch_factor=2)
     c.network_kwargs = dnnlib.EasyDict()

@@ -69,15 +69,15 @@ class EDMLoss:
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-    def __call__(self, net, train_images, target_images, target_rays, augment_pipe=None):
+    def __call__(self, net, train_images, train_rays, target_images, target_rays, augment_pipe=None, norm_src=False):
         rnd_normal = torch.randn([target_images.shape[0], 1, 1, 1], device=target_images.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
         y, augment_labels = augment_pipe(target_images) if augment_pipe is not None else (target_images, None)
         n = torch.randn_like(y) * sigma
 
-        D_yn, feature_maps, depth_final = net(noised_images=y + n, cond_images=train_images, target_rays=target_rays, \
-                                            sigma=sigma, class_labels=None, cond_features=None, augment_labels=augment_labels)
+        D_yn, feature_maps, depth_final = net(noised_images=y + n, cond_images=train_images, cond_rays=train_rays, target_rays=target_rays, \
+                                            sigma=sigma, class_labels=None, cond_features=None, augment_labels=augment_labels, norm_src=norm_src)
         loss = weight * ((D_yn - y) ** 2)
         return loss, target_images, D_yn, y + n, feature_maps, depth_final
 

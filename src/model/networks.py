@@ -17,6 +17,7 @@ from src.model.Render import Renderer
 #----------------------------------------------------------------------------
 # Unified routine for initializing weights and biases.
 
+
 def weight_init(shape, mode, fan_in, fan_out):
     if mode == 'xavier_uniform': return np.sqrt(6 / (fan_in + fan_out)) * (torch.rand(*shape) * 2 - 1)
     if mode == 'xavier_normal':  return np.sqrt(2 / (fan_in + fan_out)) * torch.randn(*shape)
@@ -656,12 +657,12 @@ class EDMPrecond(torch.nn.Module):
 
         self.renderer = Renderer()
 
-    def forward(self, noised_images, cond_images, target_rays, sigma, class_labels=None, cond_features=None, force_fp32=False, **model_kwargs):
+    def forward(self, noised_images, cond_images, cond_rays, target_rays, sigma, class_labels=None, cond_features=None, norm_src=False, force_fp32=False, **model_kwargs):
         if cond_features is not None:
             feature_maps = cond_features
             depth_final = None
         else:
-            feature_maps, depth_final = self.renderer(cond_images, target_rays)
+            feature_maps, depth_final = self.renderer(cond_images, cond_rays, target_rays, norm_src)
         
         x = noised_images
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)

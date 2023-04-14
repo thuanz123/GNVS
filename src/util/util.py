@@ -545,7 +545,7 @@ def sample_coarse_points(rays, n_coarse=64, lindisp=False):
     :return (B, n_coarse, H, W, Kc)
     """
     b, h, w, _ = rays.shape
-    rays = rays.view(-1, rays.shape[-1])
+    rays = rays.reshape(-1, rays.shape[-1])
 
     device = rays.device
     near, far = rays[:, -2:-1], rays[:, -1:]  # (B, 1)
@@ -581,17 +581,22 @@ def sample_coarse_points(rays, n_coarse=64, lindisp=False):
     return points, deltas, z_samp
 
 
-def sample_from_3dgrid(grid, coordinates):
+def sample_from_3dgrid(grid, coordinates, cond_coordinates, norm_src):
     """
     Expects coordinates in shape (batch_size, D, H, W, 3)
     Expects grid in shape (B, channels, D, H, W)
     (Also works if grid has batch size)
     Returns sampled features of shape (batch_size, D, H, W, feature_channels)
-    """
+    """    
     batch_size, n_samples, h, w, n_dims = coordinates.shape
     coordinates = coordinates.reshape(batch_size, n_samples*w*h, n_dims)
-    coordinates -= coordinates.min(dim=1, keepdim=True)[0]
-    coordinates /= coordinates.max(dim=1, keepdim=True)[0]
+
+    if norm_src:
+        cond_coordinates = cond_coordinates.reshape(batch_size, n_samples*w*h, n_dims)
+        coordinates = (coordinates - cond_coordinates.min(dim=1, keepdim=True)[0]) / (cond_coordinates.max(dim=1, keepdim=True)[0] - cond_coordinates.min(dim=1, keepdim=True)[0])
+    else:
+        coordinates = (coordinates - coordinates.min(dim=1, keepdim=True)[0]) / (coordinates.max(dim=1, keepdim=True)[0] - coordinates.min(dim=1, keepdim=True)[0])
+
     coordinates = coordinates * 2 - 1
 
     coordinates = coordinates.reshape(batch_size, n_samples, h, w, n_dims)          # normalize point in range (-1, 1)
