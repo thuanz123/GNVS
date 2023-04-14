@@ -41,4 +41,4 @@ class MLP_Nerf(torch.nn.Module):
         x = F.relu(x)
         x = self.fc2(x)
         x = F.relu(x)
-        return self.output_layer(x)
+        return self.output_layer(x) + point
